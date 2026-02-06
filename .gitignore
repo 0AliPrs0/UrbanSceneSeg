@@ -1,37 +1,37 @@
-# Byte-compiled / cache / logs
-__pycache__/
-*.pyc
-*.pyo
-*.log
+# # Byte-compiled / cache / logs
+# __pycache__/
+# *.pyc
+# *.pyo
+# *.log
 
-# Jupyter notebooks checkpoints
-.ipynb_checkpoints/
+# # Jupyter notebooks checkpoints
+# .ipynb_checkpoints/
 
-# Virtual env
-.venv/
-.env/
-/venv/
+# # Virtual env
+# .venv/
+# .env/
+# /venv/
 
-# Data directories
-/data/
-/outputs/
-/checkpoints/
-/models/
+# # Data directories
+# /data/
+# /outputs/
+# /checkpoints/
+# /models/
 
-# Model weights and serialized files
-*.pt
-*.pth
-*.h5
-*.pkl
+# # Model weights and serialized files
+# *.pt
+# *.pth
+# *.h5
+# *.pkl
 
-# System files
-.DS_Store
-Thumbs.db
+# # System files
+# .DS_Store
+# Thumbs.db
 
-# Docker / build cache
-*.pid
-*.pid.lock
+# # Docker / build cache
+# *.pid
+# *.pid.lock
 
-# IDE / editor files
-.vscode/
-.idea/
+# # IDE / editor files
+# .vscode/
+# .idea/
