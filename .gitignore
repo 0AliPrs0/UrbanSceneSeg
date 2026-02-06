@@ -1,0 +1,37 @@
+# Byte-compiled / cache / logs
+__pycache__/
+*.pyc
+*.pyo
+*.log
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# Virtual env
+.venv/
+.env/
+/venv/
+
+# Data directories
+/data/
+/outputs/
+/checkpoints/
+/models/
+
+# Model weights and serialized files
+*.pt
+*.pth
+*.h5
+*.pkl
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Docker / build cache
+*.pid
+*.pid.lock
+
+# IDE / editor files
+.vscode/
+.idea/

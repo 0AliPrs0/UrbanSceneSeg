@@ -1,0 +1,13 @@
+services:
+  deepcityseg:
+    build: .
+    container_name: deepcityseg_container
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./outputs:/app/outputs
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    tty: true
+    command: ["python", "src/train.py"]

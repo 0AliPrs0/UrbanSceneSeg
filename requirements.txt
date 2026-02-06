@@ -1,0 +1,12 @@
+# Core Deep Learning
+torch>=2.2.0
+torchvision>=0.17.0
+segmentation-models-pytorch>=0.3.3
+
+# Data Processing & Utils
+numpy
+pandas
+scikit-learn
+opencv-python
+matplotlib
+seaborn
