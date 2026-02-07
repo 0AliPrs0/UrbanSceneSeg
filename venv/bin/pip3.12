@@ -1,4 +1,4 @@
-#!/home/aliprs/Desktop/ai/venv/bin/python3
+#!/home/aliprs/Desktop/UrbanSceneSeg/venv/bin/python3
 # -*- coding: utf-8 -*-
 import re
 import sys
