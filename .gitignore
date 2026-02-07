@@ -10,13 +10,13 @@ __pycache__/
 # Virtual env
 .venv/
 .env/
+.env
 /venv/
 
 # Data directories
 /data/
-# /outputs/
-# /checkpoints/
-# /models/
+/outputs/
+/models/
 
 # Model weights and serialized files
 *.pt
