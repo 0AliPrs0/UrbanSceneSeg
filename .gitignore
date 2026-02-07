@@ -11,13 +11,12 @@ __pycache__/
 .venv/
 .env/
 /venv/
-venv/
 
 # Data directories
 /data/
-/outputs/
-/checkpoints/
-/models/
+# /outputs/
+# /checkpoints/
+# /models/
 
 # Model weights and serialized files
 *.pt
