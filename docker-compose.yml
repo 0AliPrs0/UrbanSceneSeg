@@ -1,13 +1,35 @@
+version: '3.8'
+
 services:
-  deepcityseg:
-    build: .
-    container_name: deepcityseg_container
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile.jupyter
+    container_name: urbanseg_jupyter
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./notebooks:/app/notebooks
+      - ./outputs:/app/outputs
+      - ./src:/app/src
+    ports:
+      - "8888:8888"
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: urbanseg_streamlit
     volumes:
       - ./data:/app/data
       - ./models:/app/models
       - ./outputs:/app/outputs
+      - ./src:/app/src
+    ports:
+      - "8501:8501"
     environment:
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
-    tty: true
-    command: ["python", "src/train.py"]
