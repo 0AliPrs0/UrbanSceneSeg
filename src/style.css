@@ -1,0 +1,48 @@
+/* Main container adjustments */
+.main .block-container {
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+}
+
+/* Sidebar styling */
+.css-1d391kg {
+    background-color: #f8f9fa;
+    border-right: 1px solid #dee2e6;
+}
+
+/* Button styling */
+.stButton>button {
+    border-radius: 8px;
+    border: 1px solid #4a90e2;
+    background-color: #4a90e2;
+    color: white;
+    font-weight: 600;
+    padding: 0.5rem 1rem;
+    transition: all 0.3s ease;
+}
+
+.stButton>button:hover {
+    background-color: #357ae8;
+    border-color: #357ae8;
+}
+
+/* Metric cards */
+.stMetric {
+    background-color: #f1f8ff;
+    border-radius: 10px;
+    padding: 1rem;
+    border-left: 5px solid #4a90e2;
+}
+
+/* Header styling */
+h1, h2, h3 {
+    color: #2c3e50;
+}
+
+/* Custom divider */
+hr {
+    border: none;
+    height: 2px;
+    background: linear-gradient(90deg, #4a90e2, #50e3c2);
+    margin: 2rem 0;
+}
