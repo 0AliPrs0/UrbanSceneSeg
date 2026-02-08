@@ -5,12 +5,14 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     wget \
-    libgl1-mesa-glx \
+    libgl1 \
+    libgl1-mesa-dri \
+    libglx0 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt jupyterlab
+RUN pip install --no-cache-dir --default-timeout=1000 -r requirements.txt jupyterlab
 
 COPY . .
 
