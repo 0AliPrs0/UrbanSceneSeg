@@ -8,10 +8,10 @@ __pycache__/
 .ipynb_checkpoints/
 
 # Virtual env
-#.venv/
+.venv/
 .env/
 .env
-#/venv/
+/venv/
 
 # Data directories
 /data/
