@@ -2,6 +2,7 @@
 torch
 torchvision
 segmentation-models-pytorch
+torchmetrics
 
 #Data Processing & Utils
 numpy
