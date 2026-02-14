@@ -11,8 +11,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir --default-timeout=1000 -r requirements.txt streamlit
+COPY requirements.streamlit.txt ./
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -U pip setuptools wheel && \
+    pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision && \
+    pip install -r requirements.streamlit.txt && \
+    pip install streamlit
 
 COPY . .
 

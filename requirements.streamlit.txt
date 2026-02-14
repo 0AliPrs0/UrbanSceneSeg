@@ -1,0 +1,14 @@
+#Core Deep Learning
+segmentation-models-pytorch
+
+#Data Processing & Utils
+numpy
+pandas
+scikit-learn
+opencv-python
+matplotlib
+seaborn
+pillow
+
+
+streamlit
