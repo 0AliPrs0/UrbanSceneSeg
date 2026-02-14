@@ -113,7 +113,7 @@ This command will read the `docker-compose.yml`, build the PyTorch environment, 
 
 The model's performance was rigorously evaluated on the validation split of the Cityscapes dataset. Despite the highly imbalanced nature of the data, the model achieved reliable baselines:
 
-- **Mean Intersection over Union (mIoU):** `> 41.96%`
+- **Mean Intersection over Union (mIoU):** ` 41.96%`
 - **Global Pixel Accuracy:** ` 63.77%`
 
 These metrics demonstrate that the model effectively captures both dominant structures (like roads and buildings) and smaller, critical objects (like pedestrians and traffic signs).
