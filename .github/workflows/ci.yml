@@ -1,0 +1,33 @@
+name: CI/CD Demo
+
+on:
+  push:
+    branches: [ main ]
+  
+
+jobs:
+  ci-checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout repository
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Setup Python
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      # Install only minimal dependencies
+      - name: Install CI dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy
+
+      # Run segmentation demo (smoke test)
+      - name: Run segmentation CI demo
+        run: |
+          python ci_demo.py
