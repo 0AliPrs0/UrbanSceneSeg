@@ -5,48 +5,57 @@ import os
 import time
 import json
 from datetime import datetime
+
 import streamlit as st
 import numpy as np
 from PIL import Image
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.models as tv_models
 
 
 # ============================================================
-# Paths (robust to where you run streamlit from)
+# Paths (robust)
 # ============================================================
-PROJECT_ROOT = Path(__file__).resolve().parents[2]  # .../UrbanSceneSeg
-MODEL_PATH = PROJECT_ROOT / "models" / "best_unet_cityscapes.pth"
+THIS_FILE = Path(__file__).resolve()
+
+# تلاش می‌کنیم ریشه پروژه را پیدا کنیم (UrbanSceneSeg)
+# با فرض اینکه app.py داخل src/demo باشد:
+# UrbanSceneSeg/src/demo/app.py  -> parents[2] = UrbanSceneSeg
+PROJECT_ROOT = THIS_FILE.parents[2]
+
+# اگر ساختار پروژه‌ات متفاوت است، این خط را تنظیم کن
+# حالت رایج شما: UrbanSceneSeg/models/model_full.pth
+MODEL_PATH = PROJECT_ROOT / "models" / "model_full.pth"
+
+# اگر مدل داخل src/demo/models است، این را جایگزین کن:
+# MODEL_PATH = PROJECT_ROOT / "src" / "demo" / "models" / "model_full.pth"
+
 CSS_PATH = PROJECT_ROOT / "src" / "demo" / "style.css"
 LOGO_PATH = PROJECT_ROOT / "assets" / "logo_car.png"
 
 
 # ============================================================
-# Config (from seg.ipynb)
-# - Cityscapes 19 trainIds (0..18)
-# - Input resized to 96x256
+# Config
 # ============================================================
 NUM_CLASSES = 19
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406], device=DEVICE).view(1, 3, 1, 1)
-IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225], device=DEVICE).view(1, 3, 1, 1)
 
 
-def pick_size_for_inference(pil_img, max_w=1024):
+def pick_size_for_inference(pil_img: Image.Image, max_w=1024):
     w, h = pil_img.size
-    scale = max_w / float(w)  # scale to max_w, keep aspect ratio
+    scale = max_w / float(w)
     new_w = int(w * scale)
     new_h = int(h * scale)
 
-    # divisible by 32 (for resnet)
+    # divisible by 32 (SegNet pools)
     new_w = max(32, (new_w // 32) * 32)
     new_h = max(32, (new_h // 32) * 32)
     return new_h, new_w
 
 
-# Cityscapes trainId label set used in seg.ipynb (19 classes)
+# Cityscapes trainId label set (19 classes)
 CLASS_NAMES = [
     "road",
     "sidewalk",
@@ -69,7 +78,7 @@ CLASS_NAMES = [
     "bicycle",
 ]
 
-# Matching colors from seg.ipynb (trainId -> color)
+# Matching colors
 COLORS = np.array(
     [
         (128, 64, 128),  # road
@@ -97,109 +106,251 @@ COLORS = np.array(
 
 
 # ============================================================
-# Model architecture (matches seg.ipynb: UNetTL with ResNet34 encoder)
-# NOTE: We set weights=None to avoid runtime downloads; checkpoint overwrites weights anyway.
+# Model (SegNet MTAN)
 # ============================================================
-class DoubleConv(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int):
+class SegNet(nn.Module):
+    def __init__(self):
         super().__init__()
-        self.double_conv = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.BatchNorm2d(out_channels),
+        filter = [64, 128, 256, 512, 512]
+        self.class_nb = NUM_CLASSES
+
+        self.encoder_block = nn.ModuleList([self.conv_layer([3, filter[0]])])
+        self.decoder_block = nn.ModuleList([self.conv_layer([filter[0], filter[0]])])
+        for i in range(4):
+            self.encoder_block.append(self.conv_layer([filter[i], filter[i + 1]]))
+            self.decoder_block.append(self.conv_layer([filter[i + 1], filter[i]]))
+
+        self.conv_block_enc = nn.ModuleList([self.conv_layer([filter[0], filter[0]])])
+        self.conv_block_dec = nn.ModuleList([self.conv_layer([filter[0], filter[0]])])
+        for i in range(4):
+            if i == 0:
+                self.conv_block_enc.append(
+                    self.conv_layer([filter[i + 1], filter[i + 1]])
+                )
+                self.conv_block_dec.append(self.conv_layer([filter[i], filter[i]]))
+            else:
+                self.conv_block_enc.append(
+                    nn.Sequential(
+                        self.conv_layer([filter[i + 1], filter[i + 1]]),
+                        self.conv_layer([filter[i + 1], filter[i + 1]]),
+                    )
+                )
+                self.conv_block_dec.append(
+                    nn.Sequential(
+                        self.conv_layer([filter[i], filter[i]]),
+                        self.conv_layer([filter[i], filter[i]]),
+                    )
+                )
+
+        self.encoder_att = nn.ModuleList(
+            [nn.ModuleList([self.att_layer([filter[0], filter[0], filter[0]])])]
+        )
+        self.decoder_att = nn.ModuleList(
+            [nn.ModuleList([self.att_layer([2 * filter[0], filter[0], filter[0]])])]
+        )
+        self.encoder_block_att = nn.ModuleList(
+            [self.conv_layer([filter[0], filter[1]])]
+        )
+        self.decoder_block_att = nn.ModuleList(
+            [self.conv_layer([filter[0], filter[0]])]
+        )
+
+        for j in range(2):
+            if j < 2:
+                self.encoder_att.append(
+                    nn.ModuleList([self.att_layer([filter[0], filter[0], filter[0]])])
+                )
+                self.decoder_att.append(
+                    nn.ModuleList(
+                        [self.att_layer([2 * filter[0], filter[0], filter[0]])]
+                    )
+                )
+            for i in range(4):
+                self.encoder_att[j].append(
+                    self.att_layer([2 * filter[i + 1], filter[i + 1], filter[i + 1]])
+                )
+                self.decoder_att[j].append(
+                    self.att_layer([filter[i + 1] + filter[i], filter[i], filter[i]])
+                )
+
+        for i in range(4):
+            if i < 3:
+                self.encoder_block_att.append(
+                    self.conv_layer([filter[i + 1], filter[i + 2]])
+                )
+                self.decoder_block_att.append(
+                    self.conv_layer([filter[i + 1], filter[i]])
+                )
+            else:
+                self.encoder_block_att.append(
+                    self.conv_layer([filter[i + 1], filter[i + 1]])
+                )
+                self.decoder_block_att.append(
+                    self.conv_layer([filter[i + 1], filter[i + 1]])
+                )
+
+        self.pred_task1 = self.conv_layer([filter[0], self.class_nb], pred=True)
+        self.pred_task2 = self.conv_layer([filter[0], 1], pred=True)
+
+        self.down_sampling = nn.MaxPool2d(kernel_size=2, stride=2, return_indices=True)
+        self.up_sampling = nn.MaxUnpool2d(kernel_size=2, stride=2)
+
+        self.logsigma = nn.Parameter(torch.FloatTensor([-0.5, -0.5, -0.5]))
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.xavier_normal_(m.weight)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+    def conv_layer(self, channel, pred=False):
+        if not pred:
+            return nn.Sequential(
+                nn.Conv2d(channel[0], channel[1], kernel_size=3, padding=1),
+                nn.BatchNorm2d(channel[1]),
+                nn.ReLU(inplace=True),
+            )
+        return nn.Sequential(
+            nn.Conv2d(channel[0], channel[0], kernel_size=3, padding=1),
+            nn.Conv2d(channel[0], channel[1], kernel_size=1, padding=0),
+        )
+
+    def att_layer(self, channel):
+        return nn.Sequential(
+            nn.Conv2d(channel[0], channel[1], kernel_size=1, padding=0),
+            nn.BatchNorm2d(channel[1]),
             nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
+            nn.Conv2d(channel[1], channel[2], kernel_size=1, padding=0),
+            nn.BatchNorm2d(channel[2]),
+            nn.Sigmoid(),
         )
 
     def forward(self, x):
-        return self.double_conv(x)
-
-
-class UNetTL(nn.Module):
-    """
-    From seg.ipynb:
-      resnet34 encoder (up to layer4, removing avgpool/fc)
-      upsample path: 512->256->128->64->32, then 1x1 to n_classes
-      (No skip-connections in that notebook definition.)
-    """
-
-    def __init__(self, n_classes: int = 19):
-        super().__init__()
-        resnet = tv_models.resnet34(weights=None)
-        self.encoder = nn.Sequential(*list(resnet.children())[:-2])  # (B,512,H/32,W/32)
-
-        self.up1 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)
-        self.conv1 = DoubleConv(256, 256)
-
-        self.up2 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
-        self.conv2 = DoubleConv(128, 128)
-
-        self.up3 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
-        self.conv3 = DoubleConv(64, 64)
-
-        self.up4 = nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2)
-        self.conv4 = DoubleConv(32, 32)
-
-        self.outc = nn.Conv2d(32, n_classes, kernel_size=1)
-
-    def forward(self, x):
-        x = self.encoder(x)
-        x = self.up1(x)
-        x = self.conv1(x)
-        x = self.up2(x)
-        x = self.conv2(x)
-        x = self.up3(x)
-        x = self.conv3(x)
-        x = self.up4(x)
-        x = self.conv4(x)
-        x = self.outc(x)
-        return x
-
-
-def tta_predict_logits(model, x: torch.Tensor, base_h: int, base_w: int):
-    # multi-scale + horizontal flip, then average logits
-    scales = [0.75, 1.0, 1.25]
-    acc = None
-    n = 0
-
-    for s in scales:
-        h = max(32, int((base_h * s) // 32) * 32)
-        w = max(32, int((base_w * s) // 32) * 32)
-
-        xs = F.interpolate(x, size=(h, w), mode="bilinear", align_corners=False)
-
-        # normal
-        lg = model(xs)
-        lg = F.interpolate(
-            lg, size=(base_h, base_w), mode="bilinear", align_corners=False
+        g_encoder, g_decoder, g_maxpool, g_upsampl, indices = (
+            [0] * 5 for _ in range(5)
         )
+        for i in range(5):
+            g_encoder[i], g_decoder[-i - 1] = ([0] * 2 for _ in range(2))
 
-        # flip
-        xflip = torch.flip(xs, dims=[3])
-        lgf = model(xflip)
-        lgf = torch.flip(lgf, dims=[3])
-        lgf = F.interpolate(
-            lgf, size=(base_h, base_w), mode="bilinear", align_corners=False
-        )
+        atten_encoder, atten_decoder = ([0] * 3 for _ in range(2))
+        for i in range(2):
+            atten_encoder[i], atten_decoder[i] = ([0] * 5 for _ in range(2))
+        for i in range(2):
+            for j in range(5):
+                atten_encoder[i][j], atten_decoder[i][j] = ([0] * 3 for _ in range(2))
 
-        if acc is None:
-            acc = lg + lgf
-        else:
-            acc = acc + lg + lgf
-        n += 2
+        for i in range(5):
+            if i == 0:
+                g_encoder[i][0] = self.encoder_block[i](x)
+                g_encoder[i][1] = self.conv_block_enc[i](g_encoder[i][0])
+                g_maxpool[i], indices[i] = self.down_sampling(g_encoder[i][1])
+            else:
+                g_encoder[i][0] = self.encoder_block[i](g_maxpool[i - 1])
+                g_encoder[i][1] = self.conv_block_enc[i](g_encoder[i][0])
+                g_maxpool[i], indices[i] = self.down_sampling(g_encoder[i][1])
 
-    return acc / n
+        for i in range(5):
+            if i == 0:
+                g_upsampl[i] = self.up_sampling(g_maxpool[-1], indices[-i - 1])
+                g_decoder[i][0] = self.decoder_block[-i - 1](g_upsampl[i])
+                g_decoder[i][1] = self.conv_block_dec[-i - 1](g_decoder[i][0])
+            else:
+                g_upsampl[i] = self.up_sampling(g_decoder[i - 1][-1], indices[-i - 1])
+                g_decoder[i][0] = self.decoder_block[-i - 1](g_upsampl[i])
+                g_decoder[i][1] = self.conv_block_dec[-i - 1](g_decoder[i][0])
+
+        for i in range(2):
+            for j in range(5):
+                if j == 0:
+                    atten_encoder[i][j][0] = self.encoder_att[i][j](g_encoder[j][0])
+                    atten_encoder[i][j][1] = atten_encoder[i][j][0] * g_encoder[j][1]
+                    atten_encoder[i][j][2] = self.encoder_block_att[j](
+                        atten_encoder[i][j][1]
+                    )
+                    atten_encoder[i][j][2] = F.max_pool2d(
+                        atten_encoder[i][j][2], kernel_size=2, stride=2
+                    )
+                else:
+                    atten_encoder[i][j][0] = self.encoder_att[i][j](
+                        torch.cat((g_encoder[j][0], atten_encoder[i][j - 1][2]), dim=1)
+                    )
+                    atten_encoder[i][j][1] = atten_encoder[i][j][0] * g_encoder[j][1]
+                    atten_encoder[i][j][2] = self.encoder_block_att[j](
+                        atten_encoder[i][j][1]
+                    )
+                    atten_encoder[i][j][2] = F.max_pool2d(
+                        atten_encoder[i][j][2], kernel_size=2, stride=2
+                    )
+
+            for j in range(5):
+                if j == 0:
+                    atten_decoder[i][j][0] = F.interpolate(
+                        atten_encoder[i][-1][-1],
+                        scale_factor=2,
+                        mode="bilinear",
+                        align_corners=True,
+                    )
+                    atten_decoder[i][j][0] = self.decoder_block_att[-j - 1](
+                        atten_decoder[i][j][0]
+                    )
+                    atten_decoder[i][j][1] = self.decoder_att[i][-j - 1](
+                        torch.cat((g_upsampl[j], atten_decoder[i][j][0]), dim=1)
+                    )
+                    atten_decoder[i][j][2] = atten_decoder[i][j][1] * g_decoder[j][-1]
+                else:
+                    atten_decoder[i][j][0] = F.interpolate(
+                        atten_decoder[i][j - 1][2],
+                        scale_factor=2,
+                        mode="bilinear",
+                        align_corners=True,
+                    )
+                    atten_decoder[i][j][0] = self.decoder_block_att[-j - 1](
+                        atten_decoder[i][j][0]
+                    )
+                    atten_decoder[i][j][1] = self.decoder_att[i][-j - 1](
+                        torch.cat((g_upsampl[j], atten_decoder[i][j][0]), dim=1)
+                    )
+                    atten_decoder[i][j][2] = atten_decoder[i][j][1] * g_decoder[j][-1]
+
+        t1_pred = F.log_softmax(self.pred_task1(atten_decoder[0][-1][-1]), dim=1)
+        t2_pred = self.pred_task2(atten_decoder[1][-1][-1])
+        return [t1_pred, t2_pred], self.logsigma
 
 
+# ============================================================
+# Checkpoint helpers
+# ============================================================
 def _strip_module_prefix(state_dict: dict) -> dict:
-    """Handle checkpoints saved from DataParallel (keys start with 'module.')."""
     if not state_dict:
         return state_dict
-    any_module = any(k.startswith("module.") for k in state_dict.keys())
-    if not any_module:
-        return state_dict
-    return {k.replace("module.", "", 1): v for k, v in state_dict.items()}
+    if any(k.startswith("module.") for k in state_dict.keys()):
+        return {k.replace("module.", "", 1): v for k, v in state_dict.items()}
+    return state_dict
+
+
+def _try_extract_state_dict(ckpt):
+    """
+    ckpt می‌تواند:
+      - خود مدل (nn.Module)
+      - state_dict (dict)
+      - dict شامل کلیدهایی مثل state_dict / model_state_dict / model
+    """
+    if isinstance(ckpt, nn.Module):
+        return ckpt, None  # model itself
+
+    if isinstance(ckpt, dict):
+        if "state_dict" in ckpt and isinstance(ckpt["state_dict"], dict):
+            return None, ckpt["state_dict"]
+        if "model_state_dict" in ckpt and isinstance(ckpt["model_state_dict"], dict):
+            return None, ckpt["model_state_dict"]
+        if "model" in ckpt and isinstance(ckpt["model"], dict):
+            return None, ckpt["model"]
+        # ممکن است خود dict همان state_dict باشد
+        return None, ckpt
+
+    return None, None
 
 
 @st.cache_resource
@@ -209,27 +360,42 @@ def load_model():
         return None
 
     try:
-        sd = torch.load(str(MODEL_PATH), map_location="cpu")
+        # PyTorch 2.6+: اگر فایل "مدل کامل" باشد باید weights_only=False شود
+        ckpt = torch.load(str(MODEL_PATH), map_location="cpu", weights_only=False)
 
-        # If it's a checkpoint dict, pull the right key
-        if isinstance(sd, dict) and "state_dict" in sd:
-            sd = sd["state_dict"]
-        elif isinstance(sd, dict) and "model_state_dict" in sd:
-            sd = sd["model_state_dict"]
+        # حالت 1) فایل، خود مدل کامل است
+        if isinstance(ckpt, nn.Module):
+            model = ckpt.to(DEVICE)
+            model.eval()
+            return model
 
-        if not isinstance(sd, dict):
-            st.error(
-                "Loaded checkpoint is not a state_dict/dict. Re-save as model.state_dict()."
-            )
-            return None
+        # حالت 2) dict (state_dict یا checkpoint dict)
+        if isinstance(ckpt, dict):
+            if "state_dict" in ckpt and isinstance(ckpt["state_dict"], dict):
+                sd = ckpt["state_dict"]
+            elif "model_state_dict" in ckpt and isinstance(
+                ckpt["model_state_dict"], dict
+            ):
+                sd = ckpt["model_state_dict"]
+            elif "model" in ckpt and isinstance(ckpt["model"], dict):
+                sd = ckpt["model"]
+            else:
+                sd = ckpt  # شاید خودش state_dict باشد
 
-        sd = _strip_module_prefix(sd)
+            if not isinstance(sd, dict):
+                st.error("Checkpoint dict does not contain a valid state_dict.")
+                return None
 
-        model = UNetTL(n_classes=NUM_CLASSES)
-        model.load_state_dict(sd, strict=True)
-        model.to(DEVICE)
-        model.eval()
-        return model
+            sd = _strip_module_prefix(sd)
+
+            model = SegNet()
+            model.load_state_dict(sd, strict=True)
+            model.to(DEVICE)
+            model.eval()
+            return model
+
+        st.error(f"Unsupported checkpoint type: {type(ckpt)}")
+        return None
 
     except Exception as e:
         st.exception(e)
@@ -274,10 +440,6 @@ def render_header():
 
 
 def letterbox_resize(pil_img: Image.Image, target_h: int, target_w: int):
-    """
-    Resize with aspect ratio kept + pad to (target_w,target_h).
-    Returns: padded PIL image, and (pad_left, pad_top, new_w, new_h)
-    """
     w, h = pil_img.size
     scale = min(target_w / w, target_h / h)
     new_w = int(round(w * scale))
@@ -293,62 +455,31 @@ def letterbox_resize(pil_img: Image.Image, target_h: int, target_w: int):
     return canvas, (pad_left, pad_top, new_w, new_h)
 
 
-def undo_letterbox_mask(mask_np_orig: np.ndarray, meta, orig_size):
+def undo_letterbox_mask(mask_np_model: np.ndarray, meta, orig_size):
     pad_left, pad_top, new_w, new_h = meta
-    cropped = mask_np_orig[pad_top : pad_top + new_h, pad_left : pad_left + new_w]
-    # resize back to original image size
+    cropped = mask_np_model[pad_top : pad_top + new_h, pad_left : pad_left + new_w]
     return np.array(
         Image.fromarray(cropped.astype(np.uint8)).resize(orig_size, Image.NEAREST),
         dtype=np.int32,
     )
 
 
-def softmax_logits(logits: torch.Tensor) -> torch.Tensor:
-    return torch.softmax(logits, dim=1)
-
-
-# ============================================================
-# Pre/Post processing (aligned with seg.ipynb)
-# ============================================================
 def preprocess(image_pil: Image.Image, target_h: int, target_w: int):
     padded, meta = letterbox_resize(image_pil, target_h, target_w)
-
     x = np.array(padded).astype(np.float32) / 255.0
     x = torch.from_numpy(x).permute(2, 0, 1).unsqueeze(0).to(DEVICE)
-    x = (x - IMAGENET_MEAN) / IMAGENET_STD
     return x, meta
 
 
-def postprocess(logits: torch.Tensor, conf_thr: float = 0.55):
-    """
-    logits: [B,C,H,W] یا [C,H,W]
-    خروجی:
-      mask_np: [H,W] in padded/model space (values are class ids)
-      mask_image: #Color image of mask in padded/model space
-    """
+def postprocess(logits: torch.Tensor):
     if logits.dim() == 4:
         logits = logits.squeeze(0)  # [C,H,W]
-
-    probs = torch.softmax(logits, dim=0)  # [C,H,W]
-
-    top2 = torch.topk(probs, k=2, dim=0)
-    top2_prob = top2.values  # [2,H,W]
-    top2_idx = top2.indices  # [2,H,W]
-
-    top1_prob = top2_prob[0]  # [H,W]
-    top1_idx = top2_idx[0]  # [H,W]
-    top2_idx2 = top2_idx[1]  # [H,W]
-
-    # If top1_prob >= conf_thr, keep top1_idx; else use top2_idx2 (the second-best class)
-    chosen = torch.where(top1_prob >= conf_thr, top1_idx, top2_idx2)
-
-    mask_np = chosen.detach().cpu().numpy().astype(np.int32)
+    mask_np = logits.argmax(dim=0).detach().cpu().numpy().astype(np.int32)
 
     h, w = mask_np.shape
     colored = np.zeros((h, w, 3), dtype=np.uint8)
     for cid in range(NUM_CLASSES):
         colored[mask_np == cid] = COLORS[cid]
-
     return Image.fromarray(colored), mask_np
 
 
@@ -382,21 +513,27 @@ uploaded_file = st.sidebar.file_uploader(
 # ============================================================
 render_header()
 
-# Debug info (optional; comment out later)
 with st.expander("Debug info"):
     st.write("CWD:", os.getcwd())
-    st.write("__file__:", str(Path(__file__).resolve()))
+    st.write("__file__:", str(THIS_FILE))
+    st.write("PROJECT_ROOT:", str(PROJECT_ROOT))
     st.write("MODEL_PATH:", str(MODEL_PATH))
     st.write("MODEL EXISTS?:", MODEL_PATH.exists())
     st.write("DEVICE:", str(DEVICE))
+    if MODEL_PATH.exists():
+        try:
+            ckpt = torch.load(str(MODEL_PATH), map_location="cpu")
+            st.write("Checkpoint type:", str(type(ckpt)))
+            if isinstance(ckpt, dict):
+                st.write("Checkpoint dict keys (top-level):", list(ckpt.keys())[:30])
+        except Exception as e:
+            st.write("Checkpoint inspect failed:", str(e))
 
 if uploaded_file is None:
     st.markdown(
         "## Welcome\nUpload an image via the sidebar to see segmentation results."
     )
-    st.info(
-        "ℹ️ This dashboard uses a UNet-style decoder with a ResNet34 encoder, trained on Cityscapes (19 trainId classes)."
-    )
+    st.info("ℹ️ This dashboard uses the MTAN architecture trained on Cityscapes.")
     st.stop()
 
 input_image = Image.open(uploaded_file).convert("RGB")
@@ -409,10 +546,19 @@ if model is None:
 
 st.sidebar.success("Model loaded successfully!")
 
-# Choose a better size for inference (larger and divisible by 32)
-target_h, target_w = pick_size_for_inference(input_image, max_w=1024)
-conf_thr = st.sidebar.slider("Confidence threshold", 0.30, 0.95, 0.55, 0.05)
 
+# Fix: function bug (new_w variable)
+def pick_size_for_inference_fixed(pil_img, max_w=1024):
+    w, h = pil_img.size
+    scale = max_w / float(w)
+    new_w = int(w * scale)
+    new_h = int(h * scale)
+    new_w = max(32, (new_w // 32) * 32)
+    new_h = max(32, (new_h // 32) * 32)
+    return new_h, new_w
+
+
+target_h, target_w = pick_size_for_inference_fixed(input_image, max_w=1024)
 
 with st.spinner("Generating segmentation mask..."):
     start_time = time.time()
@@ -420,25 +566,20 @@ with st.spinner("Generating segmentation mask..."):
     input_tensor, lb_meta = preprocess(input_image, target_h, target_w)
 
     with torch.inference_mode():
-        logits = tta_predict_logits(model, input_tensor, target_h, target_w)
+        predictions, _ = model(input_tensor)
+        logits = predictions[0]  # [1, 19, H, W]
 
-        # ---- 6 lines diagnostics (on logits) ----
-        probs = torch.softmax(logits, dim=1)[0]  # [C,H,W]
+        probs = torch.softmax(logits, dim=1)[0]
         mean_prob = probs.mean(dim=(1, 2)).detach().cpu().numpy()
         top = np.argsort(-mean_prob)[:5]
         st.write(
             "Top mean-prob classes:",
             [(int(i), CLASS_NAMES[i], float(mean_prob[i])) for i in top],
         )
-        # ------------------------------------------
 
-    # 1) ماسک در فضای padded/model
-    mask_image, mask_np = postprocess(logits, conf_thr=conf_thr)
+    mask_image_model, mask_np_model = postprocess(logits)
+    mask_np_orig = undo_letterbox_mask(mask_np_model, lb_meta, input_image.size)
 
-    # 2) برگردوندن ماسک به اندازه تصویر اصلی (undo letterbox)
-    mask_np_orig = undo_letterbox_mask(mask_np, lb_meta, input_image.size)
-
-    # 3) رنگ‌آمیزی ماسک نهایی (روی اندازه اصلی)
     colored_orig = np.zeros(
         (mask_np_orig.shape[0], mask_np_orig.shape[1], 3), dtype=np.uint8
     )
@@ -448,12 +589,8 @@ with st.spinner("Generating segmentation mask..."):
 
     inference_time = time.time() - start_time
 
-
-# (اختیاری) ببین چند کلاس واقعاً تولید شده
 st.write("Unique class ids:", np.unique(mask_np_orig))
 
-
-# Input & Output
 col1, col2 = st.columns(2)
 with col1:
     st.subheader("📷 Input Image")
@@ -462,6 +599,7 @@ with col1:
         caption=f"Original — {input_image.size[0]}x{input_image.size[1]}",
         use_container_width=True,
     )
+
 with col2:
     st.subheader("🎨 Predicted Mask")
     st.image(
@@ -472,7 +610,6 @@ with col2:
 
 st.markdown("---")
 
-# Class distribution
 st.subheader("📊 Class Distribution")
 distribution = calculate_class_distribution(mask_np_orig)
 
@@ -495,7 +632,6 @@ with col4:
 
 st.markdown("---")
 
-# Metrics
 st.subheader("⚙️ Inference Metrics")
 col5, col6, col7 = st.columns(3)
 with col5:
@@ -507,7 +643,6 @@ with col7:
 
 st.markdown("---")
 
-# Download results (proper PNG encoding)
 st.subheader("💾 Download Results")
 col8, col9 = st.columns(2)
 
@@ -532,7 +667,6 @@ with col9:
 
 st.markdown("---")
 
-# Legend
 st.subheader("🎨 Class Color Legend")
 legend_cols = st.columns(4)
 for idx, (cls_name, color) in enumerate(zip(CLASS_NAMES, COLORS)):
